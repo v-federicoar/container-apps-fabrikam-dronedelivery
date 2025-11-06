@@ -5,10 +5,11 @@
 
 import Koa from 'koa';
 import bodyParser from "koa-bodyparser";
-import compress from 'koa-compress';
 
-import { apiRouter, healthzRouter, swaggerRouter } from './routes.js';
-import { logger, ILogger } from './util/logging.js'
+var compress = require('koa-compress');
+
+import { apiRouter, healthzRouter, swaggerRouter } from './routes';
+import { logger, ILogger } from './util/logging'
 
 export class KoaApp {
 

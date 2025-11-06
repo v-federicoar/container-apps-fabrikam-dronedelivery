@@ -93,19 +93,20 @@ Following the steps below will result in the creation of the following Azure res
 1. Create a resource group for your deployment.
 
    ```bash
-   export PREREQS_DEPLOYMENT_NAME=workload-stamp-prereqs-${LOCATION}
+   az group create -n rg-shipping-dronedelivery-${LOCATION} -l ${LOCATION}
 
-   az deployment sub create --name $PREREQS_DEPLOYMENT_NAME --location ${LOCATION} --template-file ./workload/workload-stamp-prereqs.bicep --parameters resourceGroupLocation=${LOCATION}
+   # [This takes about 18 minutes.]
+   az deployment group create -n workload-stamp -g rg-shipping-dronedelivery-${LOCATION} -f ./workload/workload-stamp.bicep
    ```
 
 1. Get the user identities.
 
    ```bash
-   export DELIVERY_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n uid-delivery --query principalId -o tsv) && \
-   export DRONESCHEDULER_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n uid-dronescheduler --query principalId -o tsv) && \
-   export WORKFLOW_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n uid-workflow --query principalId -o tsv) && \
-   export PACKAGE_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n uid-package --query principalId -o tsv) && \
-   export INGESTION_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n uid-ingestion --query principalId -o tsv)
+   export DELIVERY_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-delivery --query principalId -o tsv) && \
+   export DRONESCHEDULER_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-dronescheduler --query principalId -o tsv) && \
+   export WORKFLOW_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-workflow --query principalId -o tsv) && \
+   export PACKAGE_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-package --query principalId -o tsv) && \
+   export INGESTION_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-ingestion --query principalId -o tsv)
 
    # Wait for Microsoft Entra ID propagation
    until az ad sp show --id $DELIVERY_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done

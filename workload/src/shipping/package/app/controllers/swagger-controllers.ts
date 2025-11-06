@@ -3,8 +3,8 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
-import * as Spec from '../spec/package-swagger.js';
-import { ILogger } from '../util/logging.js'
+import * as Spec from '../spec/package-swagger';
+import { ILogger } from '../util/logging'
 
 export class SwaggerControllers {
 

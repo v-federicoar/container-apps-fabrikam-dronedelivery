@@ -51,11 +51,6 @@ namespace Fabrikam.DroneDelivery.DeliveryService
             services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
 
             // Configure AppInsights
-            var kubernetesEnricher = Configuration["KubernetesEnricher"];
-            if (kubernetesEnricher != null && "true".Equals(kubernetesEnricher))
-            {
-                services.AddApplicationInsightsKubernetesEnricher();
-            }
             services.AddApplicationInsightsTelemetry(Configuration);
 
             // Add health check
@@ -110,7 +105,7 @@ namespace Fabrikam.DroneDelivery.DeliveryService
             });
 
             //TODO look into creating a factory of DocDBRepos/RedisCache/EventHubMessenger
-            CosmosDBRepository<InternalNotifyMeRequest>.Configure(Configuration["CosmosDB-Endpoint"], Configuration["CosmosDB-Key"], Configuration["DOCDB_DATABASEID"], Configuration["DOCDB_COLLECTIONID"], loggerFactory);
+            DocumentDBRepository<InternalNotifyMeRequest>.Configure(Configuration["CosmosDB-Endpoint"], Configuration["CosmosDB-Key"], Configuration["DOCDB_DATABASEID"], Configuration["DOCDB_COLLECTIONID"], loggerFactory);
             RedisCache<InternalDelivery>.Configure(Constants.RedisCacheDBId_Delivery, Configuration["Redis-Endpoint"], Configuration["Redis-AccessKey"], loggerFactory);
             RedisCache<DeliveryTrackingEvent>.Configure(Constants.RedisCacheDBId_DeliveryStatus, Configuration["Redis-Endpoint"], Configuration["Redis-AccessKey"], loggerFactory);
         }

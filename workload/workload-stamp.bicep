@@ -1,204 +1,262 @@
-@description('The location to deploy the workload stamp to.')
+targetScope = 'resourceGroup'
+
+/*** PARAMETERS ***/
+
+@description('The default location for all resources.')
+@minLength(1)
 param location string = resourceGroup().location
 
-@description('For Azure resources that support native geo-redundancy, provide the location the redundant service will have its secondary. Should be different than the location parameter and ideally should be a paired region - https://learn.microsoft.com/azure/best-practices-availability-paired-regions. This region does not need to support availability zones.')
-@allowed([
-  'australiasoutheast'
-  'canadaeast'
-  'eastus2'
-  'westus'
-  'centralus'
-  'westcentralus'
-  'francesouth'
-  'germanynorth'
-  'westeurope'
-  'ukwest'
-  'northeurope'
-  'japanwest'
-  'southafricawest'
-  'northcentralus'
-  'eastasia'
-  'eastus'
-  'westus2'
-  'francecentral'
-  'uksouth'
-  'japaneast'
-  'southeastasia'
-])
-param geoRedundancyLocation string = 'centralus'
-param droneSchedulerPrincipalId string
-param workflowPrincipalId string
-param deliveryPrincipalId string
-param ingestionPrincipalId string
-param packagePrincipalId string
+/*** VARIABLES ***/
 
-var prefix = substring(uniqueString(subscription().subscriptionId, resourceGroup().id), 0, 10)
-var acrName = 'acr${prefix}'
-var appInsightsName = 'ai-${prefix}'
-var logAnalyticsWorkspaceName = 'law-${prefix}'
-var nestedACRDeploymentName = '${resourceGroup().name}-acr-deployment'
-var deliveryRedisCacheSKU = 'Basic'
-var deliveryRedisCacheFamily = 'C'
-var deliveryRedisCacheCapacity = 0
-var deliveryCosmosDbName = 'cosmos-delivery-${prefix}'
-var deliveryRedisName = 'redis-delivery-${prefix}'
-var deliveryKeyVaultName = 'kv-delivery-${prefix}'
-var droneSchedulerCosmosDbName = 'cosmos-scheduler-${prefix}'
-var droneSchedulerKeyVaultName = 'kv-schedule-${prefix}'
-var packageKeyVaultName = 'kv-package-${prefix}'
-var packageMongoDbName = 'cosmos-package-${prefix}'
-var ingestionSBNamespaceName = 'sbns-ingest-${prefix}'
-var ingestionSBNamespaceSKU = 'Premium'
-var ingestionSBNamespaceTier = 'Premium'
-var ingestionSBName = 'sb-ingest-${prefix}'
-var ingestionServiceAccessKeyName = 'IngestionServiceAccessKey'
-var ingestionKeyVaultName = 'kv-ingest-${prefix}'
-var workflowKeyVaultName = 'kv-workflow-${prefix}'
-var workflowServiceAccessKeyName = 'WorkflowServiceAccessKey'
-var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var commonUniqueString = uniqueString('fabrikam', resourceGroup().id)
 
-@description('Built-in Role: Reader - https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles#reader')
-resource builtInReaderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-  name: 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+/*** EXISTING RESOURCES ***/
+
+@description('Built-in Role: Key Vault Secret Reader - https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide')
+resource keyVaultSecretsUserRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  name: '4633458b-17de-408a-b874-0445c86b69e6'
   scope: subscription()
 }
 
-module containerRegistry './nested_workload-stamp.bicep' = {
-  name: nestedACRDeploymentName
-  scope: resourceGroup('rg-shipping-dronedelivery-${location}-acr')
-  params: {
-    location: location
-    acrName: acrName
-    geoRedundancyLocation: geoRedundancyLocation
-  }
-  dependsOn: []
-}
+/*** RESOURCES (Shared for all services) ***/
 
-resource deliveryRedis 'Microsoft.Cache/Redis@2020-06-01' = {
-  name: deliveryRedisName
+@description('Log analytics workspace used for Application Insights and Azure Diagnostics for all resources.')
+resource la 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+  name: 'la-shipping-dronedelivery'
   location: location
-  tags: {
-    displayName: 'Redis Cache for inflight deliveries'
-    app: 'fabrikam-delivery'
-    TODO: 'add log analytics resource'
-  }
   properties: {
     sku: {
-      capacity: deliveryRedisCacheCapacity
-      family: deliveryRedisCacheFamily
-      name: deliveryRedisCacheSKU
+      name: 'PerGB2018'
     }
+    retentionInDays: 30
+    features: {
+      enableLogAccessUsingOnlyResourcePermissions: true
+    }
+    workspaceCapping: {
+      dailyQuotaGb: -1
+    }
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
   }
-  dependsOn: []
 }
 
-resource deliveryCosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
-  name: deliveryCosmosDbName
-  location: location
-  tags: {
-    displayName: 'Delivery Cosmos Db'
-    app: 'fabrikam-delivery'
+@description('The Azure Container Registry expected to hold all of the workload images.')
+resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
+  name: 'acr${commonUniqueString}'
+  sku: {
+    name: 'Premium'
   }
+  location: location
   properties: {
-    databaseAccountOfferType: 'Standard'
-    isVirtualNetworkFilterEnabled: false
-    virtualNetworkRules: []
-    locations: [
+    adminUserEnabled: false
+    networkRuleSet: {
+      defaultAction: 'Allow'
+      ipRules: []
+    }
+    policies: {
+      quarantinePolicy: {
+        status: 'disabled'
+      }
+      trustPolicy: {
+        type: 'Notary'
+        status: 'disabled'
+      }
+      retentionPolicy: {
+        days: 15
+        status: 'enabled'
+      }
+    }
+  }
+}
+
+@description('Azure Container Registry diagnostics settings.')
+resource dsAcr 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: acr
+  properties: {
+    workspaceId: la.id
+    logs: [
       {
-        locationName: location
-        failoverPriority: 0
+        categoryGroup: 'allLogs'
+        enabled: true
       }
     ]
   }
-  dependsOn: []
 }
 
-resource packageMongoDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
-  name: packageMongoDbName
-  kind: 'MongoDB'
+@description('Application Insights sink for all services')
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'ai-${commonUniqueString}'
+  kind: 'other'
   location: location
   tags: {
-    displayName: 'Package Cosmos Db'
-    app: 'fabrikam-package'
+    displayName: 'App Insights instance - Distributed Tracing'
   }
   properties: {
-    locations: [
-      {
-        locationName: location
-        failoverPriority: 0
-      }
-    ]
-    databaseAccountOfferType: 'Standard'
-    isVirtualNetworkFilterEnabled: false
-    apiProperties: {
-       serverVersion: '7.0'
-    }
-    virtualNetworkRules: []
+    Application_Type: 'other'
+    DisableIpMasking: false
+    DisableLocalAuth: false
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+    WorkspaceResourceId: la.id
   }
-  dependsOn: []
 }
 
-resource packageKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
-  name: packageKeyVaultName
+/*** RESOURCES (Workflow service) ***/
+
+@description('Managed identity for the Workflow service.')
+resource miWorkflow 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'mi-workflow'
   location: location
   tags: {
-    displayName: 'Package Key Vault'
-    app: 'fabrikam-package'
+    displayName: 'Workflow service managed identity'
+    what: 'rbac'
+    reason: 'workload-identity'
+    app: 'fabrikam-workflow'
+  }
+}
+
+@description('Key Vault instance used by the Workflow service.')
+resource kvWorkflow 'Microsoft.KeyVault/vaults@2019-09-01' = {
+  name: 'kv-wf-${commonUniqueString}'
+  location: location
+  tags: {
+    displayName: 'Workflow Key Vault'
+    app: 'fabrikam-workflow'
   }
   properties: {
     sku: {
       family: 'A'
       name: 'standard'
     }
+    createMode: 'default'
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableRbacAuthorization: true
     tenantId: subscription().tenantId
     networkAcls: {
-      bypass: 'AzureServices'
+      bypass: 'None'
       defaultAction: 'Allow'
+      ipRules: []
       virtualNetworkRules: []
     }
-    enableRbacAuthorization: true
     accessPolicies: []
   }
-  resource secretApplicationInsightsKey 'secrets' = {
+  
+  resource secretQueueAccessPolicyKey 'secrets' = {
+    name: 'QueueAccessPolicyKey'
+    properties: {
+      value: sbnIngestion::workflowAccessKey.listKeys().primaryKey
+    }
+  }
+
+  resource secretApplicationInsights 'secrets' = {
     name: 'ApplicationInsights--InstrumentationKey'
     properties: {
-      value: appInsights.properties.InstrumentationKey
+      value: reference(appInsights.id, '2015-05-01').InstrumentationKey
     }
   }
-  resource secretApplicationInsightsConnectionString 'secrets' = {
-    name: 'ApplicationInsights--ConnectionString'
-    properties: {
-      value: appInsights.properties.ConnectionString
-    }
-  }
-  resource secretCosmosDBConnectionString 'secrets' = {
-    name: 'CosmosDb--ConnectionString'
-    properties: {
-      value: packageMongoDb.listConnectionStrings().connectionStrings[0].connectionString
-    }
-  }
-
 }
 
-resource packagePrincipalKeyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: packageKeyVault
-  name: guid(packagePrincipalId, packageKeyVault.name, keyVaultSecretsUserRole)
+@description('Key Vault diagnostics settings.')
+resource dsKvWorkflow 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: kvWorkflow
   properties: {
-    roleDefinitionId: keyVaultSecretsUserRole
-    principalId: packagePrincipalId
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Gives Workflow service identity ability to read the key vault secrets')
+resource rsWorkflowToVaultSecretsUserRole  'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kvWorkflow
+  name: guid(miWorkflow.id, keyVaultSecretsUserRole.id, kvWorkflow.id)
+  properties: {
+    principalId: miWorkflow.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRole.id
     principalType: 'ServicePrincipal'
   }
 }
 
-resource droneSchedulerCosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
-  name: droneSchedulerCosmosDbName
+/*** RESOURCES (Delivery service) ***/
+
+@description('Managed identity for the Delivery service.')
+resource miDelivery 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'mi-delivery'
   location: location
   tags: {
-    displayName: 'Drone Scheduler Cosmos Db'
-    app: 'fabrikam-dronescheduler'
+    displayName: 'Delivery service managed identity'
+    what: 'rbac'
+    reason: 'workload-identity'
+    app: 'fabrikam-delivery'
+  }
+}
+
+@description('Redis Cache instance for the Delivery service')
+resource redisDelivery 'Microsoft.Cache/redis@2022-06-01' = {
+  name: 'redis-d-${commonUniqueString}'
+  location: location
+  tags: {
+    displayName: 'Redis Cache for inflight deliveries'
+    app: 'fabrikam-delivery'
   }
   properties: {
+    enableNonSslPort: false
+    sku: {
+      capacity: 0
+      family: 'C'
+      name: 'Basic'
+    }
+    minimumTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
+    subnetId: null
+  }
+  dependsOn: []
+}
+
+@description('Redis Cache diagnostics settings.')
+resource dsRedisDelivery 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: redisDelivery
+  properties: {
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Database for the Delivery service.')
+resource cosmosDbDelivery 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
+  name: 'cosmos-d-${commonUniqueString}'
+  location: location
+  kind: 'GlobalDocumentDB'
+  tags: {
+    displayName: 'Delivery Cosmos DB'
+    app: 'fabrikam-delivery'
+  }
+  properties: {
+    createMode: 'Default'
     databaseAccountOfferType: 'Standard'
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    disableLocalAuth: false
+    enableCassandraConnector: false
+    enableFreeTier: false
+    minimalTlsVersion: 'Tls12'
+    publicNetworkAccess: 'Enabled'
+    ipRules: []
     isVirtualNetworkFilterEnabled: false
     virtualNetworkRules: []
     locations: [
@@ -208,55 +266,34 @@ resource droneSchedulerCosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-1
       }
     ]
   }
-  dependsOn: []
 }
 
-resource ingestionSBNamespace 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
-  name: ingestionSBNamespaceName
-  location: location
-  sku: {
-    name: ingestionSBNamespaceSKU
-    tier: ingestionSBNamespaceTier
-  }
-  tags: {
-    displayName: 'Ingestion and Workflow Service Bus'
-    app: 'fabrikam-ingestion and fabrikam-workflow'
-    'app-producer': 'fabrikam-ingestion'
-    'app-consumer': 'fabrikam-workflow'
-  }
-}
-
-resource ingestionSBNamespaceIngestionSB 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = {
-  parent: ingestionSBNamespace
-  name: ingestionSBName
+@description('CosmosDB diagnostics settings.')
+resource dsCosmosDbDelivery 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: cosmosDbDelivery
   properties: {
-    lockDuration: 'PT5M'
-    maxSizeInMegabytes: 1024
-  }
-}
-
-resource ingestionSBNamespaceIngestionServiceAccessKey 'Microsoft.ServiceBus/namespaces/AuthorizationRules@2022-10-01-preview' = {
-  parent: ingestionSBNamespace
-  name: ingestionServiceAccessKeyName
-  properties: {
-    rights: [
-      'Send'
+    workspaceId: la.id
+    logs: [
+      {
+        category: 'DataPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'ControlPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'QueryRuntimeStatistics'
+        enabled: true
+      }
     ]
   }
 }
 
-resource ingestionSBNamespaceWorkflowServiceAccessKey 'Microsoft.ServiceBus/namespaces/AuthorizationRules@2022-10-01-preview' = {
-  parent: ingestionSBNamespace
-  name: workflowServiceAccessKeyName
-  properties: {
-    rights: [
-      'Listen'
-    ]
-  }
-}
-
-resource deliveryKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
-  name: deliveryKeyVaultName
+@description('Key Vault instance used by the Delivery service.')
+resource kvDelivery 'Microsoft.KeyVault/vaults@2023-02-01' = {
+  name: 'kv-d-${commonUniqueString}'
   location: location
   tags: {
     displayName: 'Delivery Key Vault'
@@ -267,40 +304,46 @@ resource deliveryKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
       family: 'A'
       name: 'standard'
     }
+    createMode: 'default'
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableRbacAuthorization: true
     tenantId: subscription().tenantId
     networkAcls: {
-      bypass: 'AzureServices'
+      bypass: 'None'
       defaultAction: 'Allow'
+      ipRules: []
       virtualNetworkRules: []
     }
-    enableRbacAuthorization: true
     accessPolicies: []
   }
+
   resource secretCosmosDbEndpoint 'secrets' = {
     name: 'CosmosDB-Endpoint'
     properties: {
-      value: deliveryCosmosDb.properties.documentEndpoint
+      value: cosmosDbDelivery.properties.documentEndpoint
     }
   }
 
   resource secretCosmosDbKey 'secrets' = {
     name: 'CosmosDB-Key'
     properties: {
-      value: deliveryCosmosDb.listKeys().primaryMasterKey
+      value: cosmosDbDelivery.listKeys().primaryMasterKey
     }
   }
 
   resource secretRedisEndpoint 'secrets' = {
     name: 'Redis-Endpoint'
     properties: {
-      value: deliveryRedis.properties.hostName
+      value: redisDelivery.properties.hostName
     }
   }
 
   resource secretRedisAccessKey 'secrets' = {
     name: 'Redis-AccessKey'
     properties: {
-      value: deliveryRedis.listKeys().primaryKey
+      value: redisDelivery.listKeys().primaryKey
     }
   }
 
@@ -312,64 +355,104 @@ resource deliveryKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
   }
 }
 
-resource deliveryPrincipalKeyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: deliveryKeyVault
-  name: guid(deliveryPrincipalId, deliveryKeyVault.name, keyVaultSecretsUserRole)
+@description('Key Vault diagnostics settings.')
+resource dsKvDelivery 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: kvDelivery
   properties: {
-    roleDefinitionId: keyVaultSecretsUserRole
-    principalId: deliveryPrincipalId
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Gives Delivery service identity ability to read the key vault secrets')
+resource rsDeliveryKeyToVaultSecretsUserRole  'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kvDelivery
+  name: guid(miDelivery.id, keyVaultSecretsUserRole.id, kvDelivery.id)
+  properties: {
+    principalId: miDelivery.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRole.id
     principalType: 'ServicePrincipal'
   }
 }
 
-resource ingestionKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
-  name: ingestionKeyVaultName
+/*** RESOURCES (Scheduler service) ***/
+
+@description('Managed identity for the Scheduler service.')
+resource miDroneScheduler 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'mi-dronescheduler'
   location: location
   tags: {
-    displayName: 'Ingestion Key Vault'
-    app: 'fabrikam-ingestion'
-  }
-  properties: {
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    tenantId: subscription().tenantId
-    networkAcls: {
-      bypass: 'AzureServices'
-      defaultAction: 'Allow'
-      virtualNetworkRules: []
-    }
-    enableRbacAuthorization: true
-    accessPolicies: []
-  }
-   resource secretQueueKey 'secrets' = {
-    name: 'Queue--Key'
-    properties: {
-      value: ingestionSBNamespaceIngestionServiceAccessKey.listKeys().primaryKey
-    }
-  }
-
-  resource secretApplicationInsightsKey 'secrets' = {
-    name: 'ApplicationInsights--InstrumentationKey'
-    properties: {
-      value: appInsights.properties.InstrumentationKey
-    }
+    displayName: 'Scheduler service managed identity'
+    what: 'rbac'
+    reason: 'workload-identity'
+    app: 'fabrikam-dronescheduler'
   }
 }
 
-resource ingestionPrincipalVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: ingestionKeyVault
-  name: guid(ingestionPrincipalId, ingestionKeyVault.name, keyVaultSecretsUserRole)
+@description('Database for the Scheduler service.')
+resource cosmosDbDroneScheduler 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
+  name: 'cosmos-ds-${commonUniqueString}'
+  location: location
+  kind: 'GlobalDocumentDB'
+  tags: {
+    displayName: 'Drone Scheduler Cosmos DB'
+    app: 'fabrikam-dronescheduler'
+  }
   properties: {
-    roleDefinitionId: keyVaultSecretsUserRole
-    principalId: ingestionPrincipalId
-    principalType: 'ServicePrincipal'
+    createMode: 'Default'
+    databaseAccountOfferType: 'Standard'
+    disableLocalAuth: false
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    enableCassandraConnector: false
+    enableFreeTier: false
+    minimalTlsVersion: 'Tls12'
+    publicNetworkAccess: 'Enabled'
+    ipRules: []
+    isVirtualNetworkFilterEnabled: false
+    virtualNetworkRules: []
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+      }
+    ]
   }
 }
 
-resource droneSchedulerKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
-  name: droneSchedulerKeyVaultName
+@description('CosmosDB diagnostics settings.')
+resource dsCosmosDbDroneScheduler 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: cosmosDbDroneScheduler
+  properties: {
+    workspaceId: la.id
+    logs: [
+      {
+        category: 'DataPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'ControlPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'QueryRuntimeStatistics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Key Vault instance used by the Scheduler service.')
+resource kvDroneScheduler 'Microsoft.KeyVault/vaults@2023-02-01' = {
+  name: 'kv-ds-${commonUniqueString}'
   location: location
   tags: {
     displayName: 'DroneScheduler Key Vault'
@@ -380,13 +463,18 @@ resource droneSchedulerKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
       family: 'A'
       name: 'standard'
     }
+    createMode: 'default'
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableRbacAuthorization: true
     tenantId: subscription().tenantId
     networkAcls: {
-      bypass: 'AzureServices'
+      bypass: 'None'
       defaultAction: 'Allow'
+      ipRules: []
       virtualNetworkRules: []
     }
-    enableRbacAuthorization: true
     accessPolicies: []
   }
 
@@ -400,162 +488,337 @@ resource droneSchedulerKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
   resource secretCosmosDBKey 'secrets' = {
     name: 'CosmosDBKey'
     properties: {
-      value: droneSchedulerCosmosDb.listKeys().primaryMasterKey
+      value: cosmosDbDroneScheduler.listKeys().primaryMasterKey
     }
   }
 }
 
-resource droneSchedulerPrincipalKeyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: droneSchedulerKeyVault
-  name: guid(droneSchedulerPrincipalId, droneSchedulerKeyVault.name, keyVaultSecretsUserRole)
+@description('Key Vault diagnostics settings.')
+resource dsKvDroneScheduler 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: kvDroneScheduler
   properties: {
-    roleDefinitionId: keyVaultSecretsUserRole
-    principalId: droneSchedulerPrincipalId
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Gives Scheduler service identity ability to read the key vault secrets')
+resource rsSchedulerToKeyVaultSecretsUserRole  'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kvDroneScheduler
+  name: guid(miDroneScheduler.id, keyVaultSecretsUserRole.id, kvDroneScheduler.id)
+  properties: {
+    principalId: miDroneScheduler.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRole.id
     principalType: 'ServicePrincipal'
   }
 }
 
-resource workflowKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
-  name: workflowKeyVaultName
+/*** RESOURCES (Ingestion service) ***/
+
+@description('Managed identity for the Ingestion service.')
+resource miIngestion 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'mi-ingestion'
   location: location
   tags: {
-    displayName: 'Workflow Key Vault'
-    app: 'fabrikam-workflow'
+    displayName: 'Ingestion service managed identity'
+    what: 'rbac'
+    reason: 'workload-identity'
+    app: 'fabrikam-ingestion'
+  }
+}
+
+@description('Service Bus Namespace for the Ingestion service')
+resource sbnIngestion 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
+  name: 'sbns-i-${commonUniqueString}'
+  location: location
+  sku: {
+    name: 'Premium'
+    tier: 'Premium'
+  }
+  tags: {
+    displayName: 'Ingestion and Workflow Service Bus'
+    app: 'fabrikam-ingestion and fabrikam-workflow'
+    'app-producer': 'fabrikam-ingestion'
+    'app-consumer': 'fabrikam-workflow'
+  }
+  properties: {
+    disableLocalAuth: false
+    minimumTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
+    zoneRedundant: true
+  }
+
+  // The queue shared between the ingestion service (send) and the workflow service (listen)
+  resource ingestionQueue 'queues' = {
+    name: 'sbq-i-${commonUniqueString}'
+    properties: {
+      lockDuration: 'PT5M'
+      maxSizeInMegabytes: 1024
+    }
+  }
+
+  // Allow Ingestion service to send
+  resource ingestionAccessKey 'AuthorizationRules' = {
+    name: 'IngestionServiceAccessKey'
+    properties: {
+      rights: [
+        'Send'
+      ]
+    }
+  }
+
+  // Allow Workflow service to listen
+  resource workflowAccessKey 'AuthorizationRules' = {
+    name: 'WorkflowServiceAccessKey'
+    properties: {
+      rights: [
+        'Listen'
+      ]
+    }
+  }
+}
+
+@description('Service Bus Namepsace diagnostics settings.')
+resource dsSbnIngestion 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: sbnIngestion
+  properties: {
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Key Vault instance used by the Ingestion service.')
+resource kvIngestion 'Microsoft.KeyVault/vaults@2023-02-01' = {
+  name: 'kv-i-${commonUniqueString}'
+  location: location
+  tags: {
+    displayName: 'Package Key Vault'
+    app: 'fabrikam-package'
   }
   properties: {
     sku: {
       family: 'A'
       name: 'standard'
     }
+    createMode: 'default'
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableRbacAuthorization: true
     tenantId: subscription().tenantId
     networkAcls: {
-      bypass: 'AzureServices'
+      bypass: 'None'
       defaultAction: 'Allow'
+      ipRules: []
       virtualNetworkRules: []
     }
-    enableRbacAuthorization: true
     accessPolicies: []
   }
 
-  resource secretQueueAccessPolicyKey 'secrets' = {
-    name: 'QueueAccessPolicyKey'
+  resource secretQueueKey 'secrets' = {
+    name: 'Queue--Key'
     properties: {
-      value: listkeys(ingestionSBNamespaceWorkflowServiceAccessKey.id, '2017-04-01').primaryKey
+      value: sbnIngestion::ingestionAccessKey.listKeys().primaryKey
     }
   }
 
-  resource secretApplicationInsights 'secrets' = {
+  resource secretApplicationInsightsKey 'secrets' = {
     name: 'ApplicationInsights--InstrumentationKey'
     properties: {
-      value: reference(appInsights.id, '2015-05-01').InstrumentationKey
+      value: appInsights.properties.InstrumentationKey
     }
   }
 }
 
-resource workflowPrincipalKeyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: workflowKeyVault
-  name: guid(workflowPrincipalId, workflowKeyVault.name, keyVaultSecretsUserRole)
+@description('Key Vault diagnostics settings.')
+resource dsKvIngestion 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: kvIngestion
   properties: {
-    roleDefinitionId: keyVaultSecretsUserRole
-    principalId: workflowPrincipalId
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Gives Ingestion service identity ability to read the key vault secrets')
+resource rsIngestionToKeyVaultSecretsUserRole  'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kvIngestion
+  name: guid(miIngestion.id, keyVaultSecretsUserRole.id, kvIngestion.id)
+  properties: {
+    principalId: miIngestion.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRole.id
     principalType: 'ServicePrincipal'
   }
 }
 
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: logAnalyticsWorkspaceName
-  location: location
-  properties: {
-    sku: {
-      name: 'pergb2018'
-    }
-    publicNetworkAccessForIngestion:'Enabled'
-    publicNetworkAccessForQuery:'Enabled'
-  }
-}
 
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsName
-  kind: 'other'
+/*** RESOURCES (Package service) ***/
+
+@description('Managed identity for the Package service.')
+resource miPackage 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'mi-package'
   location: location
   tags: {
-    displayName: 'App Insights instance - Distributed Tracing'
-  }
-  properties: {
-    Application_Type: 'other'
-    WorkspaceResourceId: logAnalyticsWorkspace.id
-    IngestionMode:'LogAnalytics'
-    publicNetworkAccessForIngestion:'Enabled'
-    publicNetworkAccessForQuery:'Enabled'
+    displayName: 'Package service managed identity'
+    what: 'rbac'
+    reason: 'workload-identity'
+    app: 'fabrikam-package'
   }
 }
 
-resource deliveryKeyVaultMicrosoftAuthorizationDeliveryIdNameIdReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name:  guid('${deliveryKeyVaultName}${resourceGroup().id}', builtInReaderRole.id)
-  scope: deliveryKeyVault
+@description('Database for the Package service.')
+resource mongoDbPackage 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
+  name: 'cosmon-p-${commonUniqueString}'
+  kind: 'MongoDB'
+  location: location
+  tags: {
+    displayName: 'Package Cosmos DB'
+    app: 'fabrikam-package'
+  }
   properties: {
-    roleDefinitionId: builtInReaderRole.id
-    principalId: deliveryPrincipalId
+    createMode: 'Default'
+    databaseAccountOfferType: 'Standard'
+    disableLocalAuth: false
+    enableCassandraConnector: false
+    enableFreeTier: false
+    minimalTlsVersion: 'Tls12'
+    publicNetworkAccess: 'Enabled'
+    ipRules: []
+    isVirtualNetworkFilterEnabled: false
+    virtualNetworkRules: []
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+      }
+    ]
+  }
+}
+
+@description('CosmosDB diagnostics settings.')
+resource dsMongoDbPackage 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: mongoDbPackage
+  properties: {
+    workspaceId: la.id
+    logs: [
+      {
+        category: 'DataPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'MongoRequests'
+        enabled: true
+      }
+      {
+        category: 'ControlPlaneRequests'
+        enabled: true
+      }
+      {
+        category: 'QueryRuntimeStatistics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Key Vault instance used by the Package service.')
+resource kvPackage 'Microsoft.KeyVault/vaults@2023-02-01' = {
+  name: 'kv-p-${commonUniqueString}'
+  location: location
+  tags: {
+    displayName: 'Package Key Vault'
+    app: 'fabrikam-package'
+  }
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    createMode: 'default'
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    enableRbacAuthorization: true 
+    tenantId: subscription().tenantId
+    networkAcls: {
+      bypass: 'None'
+      defaultAction: 'Allow'
+      ipRules: []
+      virtualNetworkRules: []
+    }
+    accessPolicies: []
+  }
+
+  resource secretApplicationInsightsKey 'secrets' = {
+    name: 'ApplicationInsights--InstrumentationKey'
+    properties: {
+      value: appInsights.properties.InstrumentationKey
+    }
+  }
+}
+
+@description('Key Vault diagnostics settings.')
+resource dsKvPackage 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'default'
+  scope: kvPackage
+  properties: {
+    workspaceId: la.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+@description('Gives Ingestion service identity ability to read the key vault secrets')
+resource rsPackageToKeyVaultSecretsUserRole  'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kvPackage
+  name: guid(miPackage.id, keyVaultSecretsUserRole.id, kvPackage.id)
+  properties: {
+    principalId: miPackage.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRole.id
     principalType: 'ServicePrincipal'
   }
 }
 
-resource workflowKeyVaultNameMicrosoftAuthorizationWorkflowIdNameIdReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01'= {
-  name: guid('${workflowKeyVaultName}${resourceGroup().id}', builtInReaderRole.id)
-  scope: workflowKeyVault
-  properties: {
-    roleDefinitionId: builtInReaderRole.id
-    principalId: workflowPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
+/*** OUTPUT ***/
 
-resource droneSchedulerKeyVaultNameMicrosoftAuthorizationDroneSchedulerIdNameIdReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('${droneSchedulerKeyVaultName}${resourceGroup().id}', builtInReaderRole.id)
-  scope: droneSchedulerKeyVault
-  properties: {
-    roleDefinitionId: builtInReaderRole.id
-    principalId: droneSchedulerPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource ingestionKeyVaultNameMicrosoftAuthorizationIngestionIdNameIdReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('${ingestionKeyVaultName}${resourceGroup().id}', builtInReaderRole.id)
-  scope: ingestionKeyVault
-  properties: {
-    roleDefinitionId: builtInReaderRole.id
-    principalId: ingestionPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource packageKeyVaultNameMicrosoftAuthorizationPackageIdNameIdReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid('${packageKeyVaultName}${resourceGroup().id}', builtInReaderRole.id)
-  scope: packageKeyVault
-  properties: {
-    roleDefinitionId: builtInReaderRole.id
-    principalId: packagePrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-output acrId string = containerRegistry.outputs.acrId
-output acrName string = acrName
-output deliveryKeyVaultUri string = deliveryKeyVault.properties.vaultUri
-output droneSchedulerKeyVaultUri string = droneSchedulerKeyVault.properties.vaultUri
-output deliveryCosmosDbName string = deliveryCosmosDbName
-output droneSchedulerCosmosDbName string = droneSchedulerCosmosDbName
-output packageMongoDbName string = packageMongoDbName
-output ingestionQueueNamespace string = ingestionSBNamespaceName
-output ingestionQueueName string = ingestionSBName
-output ingestionServiceAccessKeyName string = ingestionServiceAccessKeyName
-output workflowKeyVaultName string = workflowKeyVaultName
-output deliveryKeyVaultName string = deliveryKeyVaultName
-output droneSchedulerKeyVaultName string = droneSchedulerKeyVaultName
-output ingestionKeyVaultName string = ingestionKeyVaultName
-output packageKeyVaultName string = packageKeyVaultName
-output appInsightsName string = appInsightsName
-output laWorkspace string = logAnalyticsWorkspace.id
-output deliveryRedisName string = deliveryRedis.name
-output workflowServiceAccessKeyName string = workflowServiceAccessKeyName
+output laWorkspace string = la.id
+output acrId string = acr.id
+output acrName string = acr.name
+output deliveryKeyVaultUri string = kvDelivery.properties.vaultUri
+output droneSchedulerKeyVaultUri string = kvDroneScheduler.properties.vaultUri
+output deliveryRedisName string = redisDelivery.name
+output deliveryCosmosDbName string = cosmosDbDelivery.name
+output droneSchedulerCosmosDbName string = cosmosDbDroneScheduler.name
+output packageMongoDbName string = mongoDbPackage.name
+output ingestionQueueNamespace string = sbnIngestion.name
+output ingestionQueueName string = sbnIngestion::ingestionQueue.name
+output ingestionServiceAccessKeyName string = sbnIngestion::ingestionAccessKey.name
+output workflowKeyVaultName string = kvWorkflow.name
+output workflowServiceAccessKeyName string = sbnIngestion::workflowAccessKey.name
+output deliveryKeyVaultName string = kvDelivery.name
+output droneSchedulerKeyVaultName string = kvDroneScheduler.name
+output ingestionKeyVaultName string = kvIngestion.name
+output packageKeyVaultName string = kvPackage.name
+output appInsightsName string = appInsights.name

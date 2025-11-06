@@ -1,9 +1,5 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
-import swaggerJSDoc from 'swagger-jsdoc';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const path = require('path');
+const swaggerJSDoc = require('swagger-jsdoc');
 
 const options = {
   definition: {
@@ -12,6 +8,7 @@ const options = {
 	  title: "fabrikam-drone-delivery-package-service",
 	  description: "Fabrikam Drone Delivery Package Service",
 	  version: "0.1.0",
+	  contact: "Microsoft Patterns and Practices",
 	  termsOfService: ''
 	},
     basePath: '/api',

@@ -4,13 +4,13 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
-import com.fabrikam.dronedelivery.ingestion.configuration.ApplicationProperties;
-import io.swagger.v3.oas.models.annotations.OpenAPI30;
+import com.fabrikam.dronedelivery.ingestion.configuration.*;
 
+import springfox.documentation.swagger2.annotations.EnableSwagger2;
 
 @SpringBootApplication
 @EnableConfigurationProperties(ApplicationProperties.class)
-@OpenAPI30
+@EnableSwagger2
 public class IngestionApplication {
 
 	public static void main(String[] args) {

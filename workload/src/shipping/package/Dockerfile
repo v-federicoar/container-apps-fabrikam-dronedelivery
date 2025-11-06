@@ -1,4 +1,4 @@
-FROM node:23.1-alpine AS base
+FROM node:19.9-alpine as base
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package.json .
 COPY gulpfile.mjs .
 RUN npm set progress=false && npm config set depth 0
-RUN npm install --omit=dev
+RUN npm install --only=production
 RUN cp -R node_modules prod_node_modules
 
 # ---- build ----
@@ -24,6 +24,8 @@ RUN  npm run build
 
 # ---- runtime ----
 FROM base AS runtime
+
+MAINTAINER Fernando Antivero (https://github.com/ferantivero)
 
 WORKDIR /app
 COPY --from=dependencies /app/prod_node_modules ./node_modules
