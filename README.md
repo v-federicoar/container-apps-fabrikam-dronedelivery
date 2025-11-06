@@ -26,7 +26,7 @@ For more information on how the Container Apps features are being used in this r
 - [Use user-assigned identities when authenticating into Azure KeyVault from Delivery and DroneScheduler services](https://learn.microsoft.com/azure/container-apps/managed-identity#add-a-user-assigned-identity)
 - [Securely manage secrets for Package, Ingestion and Workflow services](https://learn.microsoft.com/azure/container-apps/manage-secrets)
 - [Run containers from any registry, the Fabrikam Drone Delivery uses Azure Container Registry (ACR) to publish its Docker images](https://learn.microsoft.com/azure/container-apps/containers)
-- [Use Revisions in Azure Container Apps to safely deploy updates, where appropriate](https://learn.microsoft.com/azure/container-apps/revisions). ❗ Workflow Service is a message consumer app, so it needs to be deployed in single revision mode, otherwise an old version could still process a message if it happens to be the one that retrieves it first.
+- [Use Revisions in Azure Container Apps to safely deploy updates, where appropriate](https://learn.microsoft.com/azure/container-apps/revisions). ❗ Workflow Service is a message consumer app, so it needs to be deployed in single revision mode, otherwise an old versions could still process a message if it happens to be the one that retrieves it first.
 - [Use ARM templates to deploy my application, there is no need for another layer of indirection like Helm charts. All the Drone Delivery containers are part of the ARM templates](https://learn.microsoft.com/azure/container-apps/get-started)
 - [Logs, see the container logs directly in Log Analytics without configuring any provider from code or Azure service](https://learn.microsoft.com/azure/container-apps/logging).
 
@@ -94,27 +94,7 @@ Following the steps below will result in the creation of the following Azure res
 
    ```bash
    az group create -n rg-shipping-dronedelivery-${LOCATION} -l ${LOCATION}
-
-   # [This takes about 18 minutes.]
-   az deployment group create -n workload-stamp -g rg-shipping-dronedelivery-${LOCATION} -f ./workload/workload-stamp.bicep
    ```
-
-1. Get the user identities.
-
-   ```bash
-   export DELIVERY_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-delivery --query principalId -o tsv) && \
-   export DRONESCHEDULER_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-dronescheduler --query principalId -o tsv) && \
-   export WORKFLOW_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-workflow --query principalId -o tsv) && \
-   export PACKAGE_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-package --query principalId -o tsv) && \
-   export INGESTION_ID_PRINCIPAL_ID=$(az identity show -g rg-shipping-dronedelivery-${LOCATION} -n mi-ingestion --query principalId -o tsv)
-
-   # Wait for Microsoft Entra ID propagation
-   until az ad sp show --id $DELIVERY_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done
-   until az ad sp show --id $DRONESCHEDULER_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done
-   until az ad sp show --id $WORKFLOW_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done
-   until az ad sp show --id $PACKAGE_ID_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done
-   until az ad sp show --id $INGESTION_ID_PRINCIPAL_ID &> /dev/null ; do echo "Waiting for Microsoft Entra ID propagation" && sleep 5; done
-   ``
 
 1. Deploy all the dependencies of the various microservices that comprise the workload.
 
@@ -122,7 +102,7 @@ Following the steps below will result in the creation of the following Azure res
 
    ```bash
    # [This takes about 18 minutes.]
-   az deployment group create -n workload-stamp -g rg-shipping-dronedelivery-${LOCATION} -f ./workload/workload-stamp.bicep -p droneSchedulerPrincipalId=$DRONESCHEDULER_PRINCIPAL_ID -p workflowPrincipalId=$WORKFLOW_PRINCIPAL_ID -p deliveryPrincipalId=$DELIVERY_PRINCIPAL_ID -p ingestionPrincipalId=$INGESTION_ID_PRINCIPAL_ID -p packagePrincipalId=$PACKAGE_ID_PRINCIPAL_ID
+   az deployment group create -n workload-stamp -g rg-shipping-dronedelivery-${LOCATION} -f ./workload/workload-stamp.bicep
    ```
 
 1. Build, tag, and host the five microservice container images in ACR.
@@ -144,7 +124,6 @@ Following the steps below will result in the creation of the following Azure res
    ```bash
    AI_NAME=$(az deployment group show -g rg-shipping-dronedelivery-${LOCATION} -n workload-stamp --query properties.outputs.appInsightsName.value -o tsv)
    AI_KEY=$(az monitor app-insights component show -g rg-shipping-dronedelivery-${LOCATION} -a $AI_NAME --query instrumentationKey -o tsv)
-   APPINSIGHTS_CONNECTION_STRING=$(az monitor app-insights component show -g rg-shipping-dronedelivery-${LOCATION} -a $AI_NAME --query connectionString --output tsv)
    AI_ID=$(az monitor app-insights component show -g rg-shipping-dronedelivery-${LOCATION} -a $AI_NAME --query appId -o tsv)
    ACR_ID=$(az deployment group show -g rg-shipping-dronedelivery-${LOCATION} -n workload-stamp --query properties.outputs.acrId.value -o tsv)
    LA_WORKSPACE_ID=$(az deployment group show -g rg-shipping-dronedelivery-${LOCATION} -n workload-stamp --query properties.outputs.laWorkspace.value -o tsv)
@@ -204,7 +183,6 @@ Following the steps below will result in the creation of the following Azure res
    az deployment group create -f main.bicep -g rg-shipping-dronedelivery-${LOCATION} -p \
       logAnalyticsResourceId=$LA_WORKSPACE_ID \
       applicationInsightsInstrumentationKey=$AI_KEY \
-      applicationInsightsConnectionString=$APPINSIGHTS_CONNECTION_STRING \
       containerRegistryResourceId=$ACR_ID \
       deliveryCosmosdbDatabaseName=$DELIVERY_DATABASE_NAME \
       deliveryCosmosdbCollectionName=$DELIVERY_COLLECTION_NAME \
@@ -240,7 +218,7 @@ Now that you have deployed your Container Apps Environment, you can validate its
 
 1. Create a delivery request using your microservices hosted on ACA.
 
-   > This calls the only Internet-exposed service.  This kicks off the five microservices to perform the request.
+   > This calls the the only Internet-exposed service.  This kick offs the five microservices to perform the request.
 
    ```bash
    curl -X POST "https://${INGESTION_FQDN}/api/deliveryrequests" --header 'Content-Type: application/json' --header 'Accept: application/json' -d '{
@@ -285,11 +263,11 @@ Now that you have deployed your Container Apps Environment, you can validate its
    PUT DroneDeliveries/Put [id] (1)
    PUT Deliveries/Put [id] (1)
    PUT /api/packages/mypackage (1)
-   POST /api/deliveryrequests (1)
+   POST IngestionController/scheduleDeliveryAsync (1)
    GET /api/packages/mypackage (1)
    ```
 
-   :book: Above result demonstrates that the HTTP request, initiated from the client, has been ingested by `/api/deliveryrequests` to be later consumed by the Workflow background service to be sent to `Deliveries/Put`, `/api/packages/mypackage`, and `DroneDeliveries/Put` endpoints respectively. Them all are microservices running within Azure Container Apps.
+   :book: Above result demonstrates that the HTTP request, initiated from the client, has been ingested by `IngestionController/scheduleDeliveryAsync` to be later consumed by the Workflow background service to be sent to `Deliveries/Put`, `/api/packages/mypackage`, and `DroneDeliveries/Put` endpoints respectively. Them all are microservices running within Azure Container Apps.
 
 ## Troubleshooting
 
@@ -307,7 +285,6 @@ az containerapp revision restart -g rg-shipping-dronedelivery --app <containerap
 
    ```bash
    az group delete -n rg-shipping-dronedelivery-${LOCATION} -y
-   az group delete -n rg-shipping-dronedelivery-${LOCATION}-acr -y
    ```
 
 1. Purge deleted Key Vaults related to this deployment.

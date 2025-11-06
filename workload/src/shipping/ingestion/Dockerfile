@@ -1,4 +1,4 @@
-FROM openjdk:8-jre-alpine as base
+FROM openjdk:17.0.1-jdk-slim as base
 WORKDIR /usr/src/app
 EXPOSE 80
 

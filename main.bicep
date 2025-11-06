@@ -10,10 +10,6 @@ param logAnalyticsResourceId string
 @minLength(20)
 param applicationInsightsInstrumentationKey string
 
-@description('The Application Insights connection string used for all of the logging done by the microservices.')
-@minLength(20)
-param applicationInsightsConnectionString string
-
 @description('The resource ID of the existing Azure Container Registry that contains all the microservices.')
 @minLength(40)
 param containerRegistryResourceId string
@@ -94,27 +90,27 @@ param location string = resourceGroup().location
 
 @description('The existing managed identity for the Delivery service.')
 resource miDelivery 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: 'uid-delivery'
+  name: 'mi-delivery'
 }
 
 @description('The existing managed identity for the Scheduler service.')
 resource miDroneScheduler 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: 'uid-dronescheduler'
+  name: 'mi-dronescheduler'
 }
 
 @description('The existing managed identity for the Workflow service.')
 resource miWorkflow 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: 'uid-workflow'
+  name: 'mi-workflow'
 }
 
 @description('The existing managed identity for the Package service.')
 resource miPackage 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: 'uid-package'
+  name: 'mi-package'
 }
 
 @description('The existing managed identity for the Ingestion service.')
 resource miIngestion 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: 'uid-ingestion'
+  name: 'mi-ingestion'
 }
 
 /*** RESOURCES ***/
@@ -378,8 +374,8 @@ module ca_package 'container-http.bicep' = {
     revisionMode: 'multiple'
     secrets: [
       {
-        name: 'applicationinsights-connectionstring'
-        value: applicationInsightsConnectionString
+        name: 'applicationinsights-instrumentationkey'
+        value: applicationInsightsInstrumentationKey
       }
       {
         name: 'mongodb-connectrionstring'
@@ -388,8 +384,8 @@ module ca_package 'container-http.bicep' = {
     ]
     env: [
       {
-        name: 'APPINSIGHTS_CONNECTION_STRING'
-        secretref: 'applicationinsights-connectionstring'
+        name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+        secretref: 'applicationinsights-instrumentationkey'
       }
       {
         name: 'CONNECTION_STRING'
